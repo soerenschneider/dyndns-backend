@@ -1,0 +1,5 @@
+gen/
+tf/state.tf
+.terraform
+*.tfvars
+*.json
