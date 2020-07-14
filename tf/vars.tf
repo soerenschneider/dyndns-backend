@@ -19,7 +19,7 @@ variable host_record {
 
 variable bucket_name {
   description = "The name of the S3 bucket to store the dyndns configuration to"
-  default     = "dyndnsbucket"
+  default     = "yourprefix-dyndnsbucket"
 }
 
 variable file_key {
