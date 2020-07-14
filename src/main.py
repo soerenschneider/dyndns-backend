@@ -21,11 +21,6 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 
-def is_valid_ipv4(ip):
-    m = re.match(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$", ip)
-    return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
-
-
 def read_s3_config():
     global S3_CLIENT
     if not S3_CLIENT:
