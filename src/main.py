@@ -5,57 +5,68 @@ import re
 import boto3
 import hashlib
 import os
+import logging
 
-# Tell the script where to find the configuration file.
+# tunables
 config_s3_region = os.getenv("S3_REGION", "us-west-1")
 config_s3_bucket = os.getenv("S3_BUCKET")
 config_s3_key = os.getenv("S3_KEY", "dyndns/dyndns.json")
+
+# re-use clients
+S3_CLIENT = None
+ROUTE53_CLIENT = None
+
+# add logger
+log = logging.getLogger()
+log.setLevel(logging.INFO)
+
 
 def is_valid_ipv4(ip):
     m = re.match(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$", ip)
     return bool(m) and all(map(lambda n: 0 <= int(n) <= 255, m.groups()))
 
-def read_s3_config():
-    # Define the S3 client.
-    s3_client = boto3.client(
-        's3',
-        config_s3_region,
-    )
 
-    # Download the config to /tmp
+def read_s3_config():
+    global S3_CLIENT
+    if not S3_CLIENT:
+        log.info("Re-generating s3 client")
+        S3_CLIENT = boto3.client('s3', config_s3_region,)
+
+    log.info("Downloading config file")
     tmp_file = '/tmp/dyndns.json'
-    s3_client.download_file(
+    S3_CLIENT.download_file(
         config_s3_bucket,
         config_s3_key,
         tmp_file
     )
     
-    # Open the config and return the json as a dictionary.
-    full_config = open(tmp_file).read()
-    return(json.loads(full_config))
+    log.info("Decoding config file")
+    conf = None
+    with open(tmp_file) as json_config:
+        conf = json.loads(json_config.read())
 
-def is_request_allowed(request, config):
-    secret = request['secret']
-    entry = request['entry']
-    public_ip = request['public_ip']
+    return conf
     
 def check_request(validation_hash, dns_record, public_ip, config):
-    print(dns_record)
     if not dns_record in config:
+        log.warning("No such record in config: %s", dns_record)
         raise Exception("Bad request")
 
     shared_secret = config[dns_record]['shared_secret']
-    
+
     hashable = "{}{}{}".format(dns_record, public_ip, shared_secret)
     calculated_hash = hashlib.sha256(hashable.encode()).hexdigest()
     if not calculated_hash == validation_hash:
-        print("Calculated hash mismatches requests hash")
+        log.warn("Calculated hash '%s' mismatches requests hash '%s'", calculated_hash, validation_hash)
         raise Exception("Bad request")
-        
-    print("Upserting {} -> {} using hash '{}'".format(dns_record, public_ip, calculated_hash))
 
 def upsert_entry(dns_record, public_ip, route_53_zone_id, ttl=300, type="A"):
-    route53_client = boto3.client('route53', region_name=config_s3_region)
+    global ROUTE53_CLIENT
+    if not ROUTE53_CLIENT:
+        log.info("Re-generating route53 client")
+        route53_client = boto3.client('route53', region_name=config_s3_region)
+
+    log.info("Upserting dns record %s to %s", dns_record, public_ip)
     change_route53_record_set = route53_client.change_resource_record_sets(
         HostedZoneId=route_53_zone_id,
         ChangeBatch={
@@ -81,26 +92,33 @@ def handler(event, context):
     if not config_s3_bucket:
         return {"statusCode": 500, "body": "Configuration error"}
 
+    ip = "UNKNOWN"
     try:
-        validation_hash = event['validation_hash']
-        dns_record = event['dns_record']
-        public_ip = event['public_ip']
+        ip = event['requestContext']['identity']['sourceIp']
+        body = message = json.loads(event['body'])
+        validation_hash = body['validation_hash']
+        dns_record = body['dns_record']
+        public_ip = body['public_ip']
     except KeyError:
+        log.warn("Client '%s' did not provide all information", ip)
         return {
             "statusCode": 400,
             "body": "Bad request: Provide 'validation_hash', 'dns_record' and 'public_ip'"
         }
-    except:
+
+    log.info("Client %s wants to update record '%s' to %s", ip, dns_record, public_ip)
+    try:
+        config = read_s3_config()
+        check_request(validation_hash, dns_record, public_ip, config)
+        upsert_entry(dns_record, public_ip, config[dns_record]['route_53_zone_id'])
+    except Exception as e:
+        log.error("Encountered error: %s", e)
         return {
             "statusCode": 500,
             "body": "Internal error"
         }
 
-    
-    config = read_s3_config()
-    check_request(validation_hash, dns_record, public_ip, config)
-    upsert_entry(dns_record, public_ip, config[dns_record]['route_53_zone_id'])
-    
+    log.info("Successfully executed request, bye")
     return {
         "statusCode": 200,
         "body": "OK"
