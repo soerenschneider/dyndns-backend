@@ -49,7 +49,7 @@ def check_request(validation_hash, dns_record, public_ip, config):
 
     shared_secret = config[dns_record]['shared_secret']
 
-    hashable = "{}{}{}".format(dns_record, public_ip, shared_secret)
+    hashable = f"{dns_record}{public_ip}{shared_secret}")
     calculated_hash = hashlib.sha256(hashable.encode()).hexdigest()
     if calculated_hash != validation_hash:
         log.warn("Calculated hash '%s' mismatches requests hash '%s'", calculated_hash, validation_hash)
