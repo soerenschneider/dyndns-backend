@@ -5,3 +5,6 @@ venv:
 
 venv-pylint: venv
 	venv/bin/pip3 install pylint pylint-exit anybadge
+
+lint:
+	venv/bin/pylint --output-format=text src/
