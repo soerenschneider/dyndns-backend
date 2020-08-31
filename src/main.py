@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 import json
-import re
-import boto3
 import hashlib
 import os
 import logging
+
+import boto3
 
 # tunables
 config_s3_region = os.getenv("S3_REGION", "us-west-1")
@@ -34,14 +34,14 @@ def read_s3_config():
         config_s3_key,
         tmp_file
     )
-    
+
     log.info("Decoding config file")
     conf = None
     with open(tmp_file) as json_config:
         conf = json.loads(json_config.read())
 
     return conf
-    
+
 def check_request(validation_hash, dns_record, public_ip, config):
     if not dns_record in config:
         log.warning("No such record in config: %s", dns_record)
@@ -49,28 +49,28 @@ def check_request(validation_hash, dns_record, public_ip, config):
 
     shared_secret = config[dns_record]['shared_secret']
 
-    hashable = f"{dns_record}{public_ip}{shared_secret}")
+    hashable = f"{dns_record}{public_ip}{shared_secret}"
     calculated_hash = hashlib.sha256(hashable.encode()).hexdigest()
     if calculated_hash != validation_hash:
-        log.warn("Calculated hash '%s' mismatches requests hash '%s'", calculated_hash, validation_hash)
+        log.warning("Calculated hash '%s' != requests hash '%s'", calculated_hash, validation_hash)
         raise Exception("Bad request")
 
-def upsert_entry(dns_record, public_ip, route_53_zone_id, ttl=300, type="A"):
+def upsert_entry(dns_record, public_ip, route_53_zone_id, ttl=300, dns_type="A"):
     global ROUTE53_CLIENT
     if not ROUTE53_CLIENT:
         log.info("Re-generating route53 client")
         route53_client = boto3.client('route53', region_name=config_s3_region)
 
     log.info("Upserting dns record %s to %s", dns_record, public_ip)
-    change_route53_record_set = route53_client.change_resource_record_sets(
+    route53_client.change_resource_record_sets(
         HostedZoneId=route_53_zone_id,
         ChangeBatch={
-            'Changes': [ 
+            'Changes': [
                 {
                     'Action': 'UPSERT',
                     'ResourceRecordSet': {
                         'Name': dns_record,
-                        'Type': type,
+                        'Type': dns_type,
                         'TTL': ttl,
                         'ResourceRecords': [
                             {
@@ -84,18 +84,19 @@ def upsert_entry(dns_record, public_ip, route_53_zone_id, ttl=300, type="A"):
     )
 
 def handler(event, context):
+    #pylint: disable=unused-argument
     if not config_s3_bucket:
         return {"statusCode": 500, "body": "Configuration error"}
 
     ip = "UNKNOWN"
     try:
         ip = event['requestContext']['identity']['sourceIp']
-        body = message = json.loads(event['body'])
+        body = json.loads(event['body'])
         validation_hash = body['validation_hash']
         dns_record = body['dns_record']
         public_ip = body['public_ip']
     except KeyError:
-        log.warn("Client '%s' did not provide all information", ip)
+        log.warning("Client '%s' did not provide all information", ip)
         return {
             "statusCode": 400,
             "body": "Bad request: Provide 'validation_hash', 'dns_record' and 'public_ip'"
@@ -106,8 +107,8 @@ def handler(event, context):
         config = read_s3_config()
         check_request(validation_hash, dns_record, public_ip, config)
         upsert_entry(dns_record, public_ip, config[dns_record]['route_53_zone_id'])
-    except Exception as e:
-        log.error("Encountered error: %s", e)
+    except Exception as err:
+        log.error("Encountered error: %s", err)
         return {
             "statusCode": 500,
             "body": "Internal error"
