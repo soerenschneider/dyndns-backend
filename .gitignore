@@ -1,3 +1,5 @@
+pylint/
+venv/
 gen/
 tf/state.tf
 .terraform
